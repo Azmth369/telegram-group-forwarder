@@ -75,10 +75,27 @@ async def message_handler(
     message = update.effective_message
     chat = update.effective_chat
 
+    logger.info(
+        "Received update %s: type=%s chat_id=%s chat_type=%s chat_title=%s message_id=%s",
+        update.update_id,
+        type(update).__name__,
+        chat.id if chat else None,
+        chat.type if chat else None,
+        chat.title if chat else None,
+        message.message_id if message else None,
+    )
+
     if message is None or chat is None:
+        logger.info("Ignoring update %s: no effective message/chat", update.update_id)
         return
 
     if chat.id != SOURCE_GROUP_ID:
+        logger.info(
+            "Ignoring update %s: chat_id %s does not match SOURCE_GROUP_ID %s",
+            update.update_id,
+            chat.id,
+            SOURCE_GROUP_ID,
+        )
         return
 
     if message.from_user and message.from_user.is_bot:
