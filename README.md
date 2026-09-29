@@ -1,126 +1,61 @@
 # Telegram Group Forwarder
 
-Personal-use Telegram group-to-channel forwarder built with Python and Telethon.
+Personal-use Telegram group-to-channel forwarder built with Python and the Telegram Bot API.
 
-It listens to one private Telegram group using a Telegram user account and natively forwards messages from human members to one private Telegram channel.
+The bot listens to one private Telegram group and natively forwards human-member messages to one private Telegram channel.
 
 ## Features
-
-- Text
-- Photos
-- Videos
-- Documents/files
-- Audio
-- Voice messages
-- GIFs/animations
-- Stickers
-- Video notes
-- Media albums
-- Other message types Telegram permits the account to forward
+- Text, photos, videos, documents/files, audio, voice, GIFs, stickers, video notes, and other forwardable message types
 - Native Telegram forwarding; no download/re-upload pipeline
+- Album grouping preserved
 - Bot messages ignored
-- Album messages forwarded as albums
-- Group edits do not modify the channel copy
-- Group deletions do not delete the channel copy
-- No database or duplicate tracking in this initial version
+- Source edits/deletions do not modify already-forwarded messages
+- No database or duplicate tracking
+- No user-account session or StringSession
 - No Postman required
 
-Telegram's own restrictions still apply. This project does not bypass protected-content or other Telegram restrictions.
+Telegram restrictions still apply. Protected-content messages cannot be forwarded by the Bot API.
 
-## Local setup
+## Bot setup
+1. Create the bot with @BotFather.
+2. Keep the bot token secret.
+3. Add the bot to the source group.
+4. Make the bot an administrator in the source group so it receives all group messages.
+5. Add the bot to the destination channel and give it permission to post.
+6. Disable source-chat content protection if you need those messages forwarded.
 
-1. Create Telegram API credentials at:
-   https://my.telegram.org
+## Environment variables
+Create .env from .env.example:
 
-2. Clone this repository.
-
-3. Create a virtual environment:
-
-    python -m venv .venv
-
-   Windows:
-
-    .venv\Scripts\activate
-
-4. Install dependencies:
-
-    pip install -r requirements.txt
-
-5. Copy .env.example to .env.
-
-6. Put API_ID and API_HASH into .env.
-
-7. Generate a StringSession:
-
-    python scripts/generate_session.py
-
-   Complete Telegram login. If two-step verification is enabled, enter the password when requested.
-
-8. Put the printed SESSION_STRING into .env.
-
-9. Set the source group and destination channel IDs:
-
+    BOT_TOKEN=1234567890:your_bot_token
     SOURCE_GROUP_ID=-1001234567890
     DESTINATION_CHANNEL_ID=-1009876543210
+    LOG_LEVEL=INFO
 
-10. Run:
+Never commit .env or the bot token.
 
-    python -m app.main
-
-11. Send test content in the source group and verify it appears in the destination channel.
+## Local setup
+1. Create a virtual environment: python -m venv .venv
+2. Windows: .venv\\Scripts\\activate
+3. Install dependencies: python -m pip install -r requirements.txt
+4. Fill in .env.
+5. Run: python -m app.main
 
 ## Render deployment
-
-The repository includes render.yaml and a Dockerfile.
-
-Use a Render Background Worker. Set these environment variables in Render:
-
-- API_ID
-- API_HASH
-- SESSION_STRING
-- SOURCE_GROUP_ID
-- DESTINATION_CHANNEL_ID
-
-LOG_LEVEL can remain INFO.
-
-The authenticated Telegram account must have access to both the source group and destination channel.
-
-A Background Worker is used because the application maintains a long-running Telegram connection and does not need an HTTP server.
+Use the Render Background Worker defined in render.yaml.
+Set BOT_TOKEN, SOURCE_GROUP_ID, DESTINATION_CHANNEL_ID, and LOG_LEVEL in Render.
+The worker uses long-running Bot API polling and does not need an HTTP server.
 
 ## Security
-
-Never commit .env, SESSION_STRING, Telegram API credentials, or .session files.
-
-Treat SESSION_STRING as a secret credential.
-
-## Postman
-
-Postman is not required. The initial architecture has no REST API endpoint.
+The bot token is a secret credential. If it is exposed, revoke/regenerate it with @BotFather and update Render.
 
 ## Troubleshooting
-
-If messages do not forward, verify:
-
-1. The user account is a member of the source group.
-2. The user account can post in the destination channel.
-3. The numeric IDs are correct.
-4. Telegram has not restricted forwarding for the content.
-5. Render logs contain "Forwarder is ready".
-
-If the Telegram session becomes invalid, generate a fresh StringSession locally and update the Render SESSION_STRING environment variable.
-
-If Telegram returns FloodWait, the application waits for the requested period and retries the forward.
+- Confirm the bot is an administrator in the source group.
+- Confirm it can post in the destination channel.
+- Confirm both numeric IDs are correct.
+- Confirm source content is not protected.
+- Check Render logs for Forwarder is ready.
+- Send a new test message after the worker starts.
 
 ## Architecture
-
-    Private Telegram Group
-             |
-             v
-    Telegram User Account
-           Telethon
-             |
-             v
-    Native Telegram Forward
-             |
-             v
-    Private Telegram Channel
+Private Telegram Group -> Telegram Bot -> Bot API -> Native Telegram Forward -> Private Telegram Channel
