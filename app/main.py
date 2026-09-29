@@ -1,15 +1,13 @@
 import asyncio
 import logging
 
-from telethon import TelegramClient, events
-from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
+from telegram import Update
+from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from app.config import (
-    API_HASH,
-    API_ID,
+    BOT_TOKEN,
     DESTINATION_CHANNEL_ID,
-    SESSION_STRING,
     SOURCE_GROUP_ID,
 )
 from app.logger import setup_logging
@@ -18,120 +16,156 @@ from app.logger import setup_logging
 setup_logging()
 logger = logging.getLogger("telegram-group-forwarder")
 
-client = TelegramClient(
-    StringSession(SESSION_STRING),
-    API_ID,
-    API_HASH,
-    connection_retries=None,
-    retry_delay=5,
-)
+album_buffers: dict[str, set[int]] = {}
+album_tasks: dict[str, asyncio.Task] = {}
 
 
-async def is_human_message(message) -> bool:
+async def forward_with_retry(bot, message_ids: list[int]) -> None:
+    while True:
+        try:
+            await bot.forward_messages(
+                chat_id=DESTINATION_CHANNEL_ID,
+                from_chat_id=SOURCE_GROUP_ID,
+                message_ids=message_ids,
+            )
+            return
+        except RetryAfter as exc:
+            logger.warning(
+                "Telegram rate limit: sleeping %s seconds",
+                exc.retry_after,
+            )
+            await asyncio.sleep(exc.retry_after)
+        except (TimedOut, NetworkError):
+            logger.warning("Telegram network error while forwarding; retrying")
+            await asyncio.sleep(5)
+
+
+async def flush_album(media_group_id: str, bot) -> None:
     try:
-        sender = await message.get_sender()
+        await asyncio.sleep(1.5)
 
-        if sender is None:
-            return True
+        message_ids = sorted(album_buffers.pop(media_group_id, set()))
+        if not message_ids:
+            return
 
-        return not bool(getattr(sender, "bot", False))
-    except Exception:
-        logger.exception("Could not inspect sender for message %s", message.id)
-        return True
+        await forward_with_retry(bot, message_ids)
 
-
-async def forward_with_retry(messages) -> None:
-    try:
-        await client.forward_messages(
-            entity=DESTINATION_CHANNEL_ID,
-            messages=messages,
-            from_peer=SOURCE_GROUP_ID,
-        )
-    except FloodWaitError as exc:
-        logger.warning("Telegram FloodWait: sleeping %s seconds", exc.seconds)
-        await asyncio.sleep(exc.seconds)
-        await client.forward_messages(
-            entity=DESTINATION_CHANNEL_ID,
-            messages=messages,
-            from_peer=SOURCE_GROUP_ID,
-        )
-
-
-@client.on(events.Album(chats=SOURCE_GROUP_ID))
-async def album_handler(event) -> None:
-    messages = [
-        message
-        for message in event.messages
-        if await is_human_message(message)
-    ]
-
-    if not messages:
-        logger.info("Ignoring album %s: no human messages", event.grouped_id)
-        return
-
-    try:
-        await forward_with_retry(messages)
         logger.info(
             "Forwarded album %s (%d message(s))",
-            event.grouped_id,
-            len(messages),
+            media_group_id,
+            len(message_ids),
+        )
+    except BadRequest as exc:
+        logger.error(
+            "Could not forward album %s: %s",
+            media_group_id,
+            exc,
         )
     except Exception:
-        logger.exception("Failed to forward album %s", event.grouped_id)
+        logger.exception("Failed to forward album %s", media_group_id)
+    finally:
+        album_tasks.pop(media_group_id, None)
 
 
-@client.on(events.NewMessage(chats=SOURCE_GROUP_ID))
-async def message_handler(event) -> None:
-    message = event.message
+async def message_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    message = update.effective_message
+    chat = update.effective_chat
 
-    # Albums are handled by Album above.
-    if message.grouped_id:
+    if message is None or chat is None:
         return
 
-    if not await is_human_message(message):
-        logger.info("Ignoring bot message %s", message.id)
+    if chat.id != SOURCE_GROUP_ID:
+        return
+
+    if message.from_user and message.from_user.is_bot:
+        logger.info("Ignoring bot message %s", message.message_id)
+        return
+
+    media_group_id = message.media_group_id
+
+    if media_group_id:
+        album_buffers.setdefault(media_group_id, set()).add(message.message_id)
+
+        task = album_tasks.get(media_group_id)
+        if task is None or task.done():
+            task = asyncio.create_task(
+                flush_album(media_group_id, context.bot)
+            )
+            album_tasks[media_group_id] = task
+
         return
 
     try:
-        await forward_with_retry(message)
-        logger.info("Forwarded message %s", message.id)
+        await forward_with_retry(context.bot, [message.message_id])
+        logger.info("Forwarded message %s", message.message_id)
+    except BadRequest as exc:
+        logger.error(
+            "Could not forward message %s: %s",
+            message.message_id,
+            exc,
+        )
     except Exception:
-        logger.exception("Failed to forward message %s", message.id)
+        logger.exception(
+            "Failed to forward message %s",
+            message.message_id,
+        )
 
 
-async def startup() -> None:
-    logger.info("Starting Telegram Group Forwarder")
+async def post_init(application: Application) -> None:
+    bot = application.bot
+    me = await bot.get_me()
 
-    await client.start()
+    source = await bot.get_chat(SOURCE_GROUP_ID)
+    destination = await bot.get_chat(DESTINATION_CHANNEL_ID)
 
-    me = await client.get_me()
-    account = (
-        f"@{me.username}"
-        if me.username
-        else (me.first_name or "") + (" " + me.last_name if me.last_name else "")
-    ).strip()
-
-    source = await client.get_entity(SOURCE_GROUP_ID)
-    destination = await client.get_entity(DESTINATION_CHANNEL_ID)
-
-    logger.info("Logged in as: %s", account)
-    logger.info("Source group: %s", getattr(source, "title", SOURCE_GROUP_ID))
+    logger.info("Logged in as bot: @%s", me.username or me.first_name)
     logger.info(
-        "Destination channel: %s",
-        getattr(destination, "title", DESTINATION_CHANNEL_ID),
+        "Source group: %s (%s)",
+        source.title or SOURCE_GROUP_ID,
+        SOURCE_GROUP_ID,
+    )
+    logger.info(
+        "Destination channel: %s (%s)",
+        destination.title or DESTINATION_CHANNEL_ID,
+        DESTINATION_CHANNEL_ID,
     )
     logger.info("Forwarder is ready")
 
 
-async def main() -> None:
-    await startup()
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    logger.error(
+        "Unhandled Telegram update error: %s",
+        context.error,
+        exc_info=context.error,
+    )
 
-    try:
-        await client.run_until_disconnected()
-    finally:
-        await client.disconnect()
-        logger.info("Telegram client disconnected")
+
+def main() -> None:
+    logger.info("Starting Telegram Bot Group Forwarder")
+
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    application.add_handler(
+        MessageHandler(filters.ALL, message_handler)
+    )
+    application.add_error_handler(error_handler)
+
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
