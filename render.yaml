@@ -1,0 +1,20 @@
+services:
+  - type: worker
+    name: telegram-group-forwarder
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: SOURCE_GROUP_ID
+        sync: false
+      - key: DESTINATION_CHANNEL_ID
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
