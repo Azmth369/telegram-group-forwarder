@@ -1,10 +1,10 @@
 services:
-  - type: worker
+  - type: web
     name: telegram-group-forwarder
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     envVars:
       - key: BOT_TOKEN
         sync: false

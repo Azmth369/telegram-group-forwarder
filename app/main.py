@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from telegram import Update
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
@@ -149,6 +150,16 @@ async def error_handler(
 def main() -> None:
     logger.info("Starting Telegram Bot Group Forwarder")
 
+    port = int(os.getenv("PORT", "10000"))
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+
+    if not render_url:
+        raise RuntimeError(
+            "RENDER_EXTERNAL_URL is missing. This deployment is intended for a Render Web Service."
+        )
+
+    webhook_url = f"{render_url.rstrip('/')}/telegram"
+
     application = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -161,9 +172,14 @@ def main() -> None:
     )
     application.add_error_handler(error_handler)
 
-    application.run_polling(
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path="telegram",
+        webhook_url=webhook_url,
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
+        secret_token=BOT_TOKEN.split(":")[0],
     )
 
 
