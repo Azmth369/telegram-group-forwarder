@@ -6,11 +6,7 @@ services:
     dockerContext: .
     plan: starter
     envVars:
-      - key: API_ID
-        sync: false
-      - key: API_HASH
-        sync: false
-      - key: SESSION_STRING
+      - key: BOT_TOKEN
         sync: false
       - key: SOURCE_GROUP_ID
         sync: false
